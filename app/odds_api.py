@@ -68,7 +68,7 @@ def fetch_odds_for_sport(
         "markets": ",".join(filtered),
         "oddsFormat": "american",
         "dateFormat": date_format,
-        "bookmakers": ",".join(BOOKS) if BOOKS else None,
+        "bookmakers": None,
     }
     params = {k: v for k, v in params.items() if v is not None}
 
