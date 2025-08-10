@@ -1,20 +1,15 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
-from pricing import (                     # <— change this line
-    american_to_prob,
-    american_to_decimal,
-    no_vig_two_way,
-    expected_value_per_unit,
-    kelly_stake_units,
-    confidence_from_edge,
-)
+from .pricing import american_to_prob, american_to_decimal, no_vig_two_way, expected_value_per_unit, kelly_stake_units, confidence_from_edge
 
 
-def _best_prices_two_way(bookmakers: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _best_prices_two_way(bookmakers: List[Dict[str, Any]], allowed_books: List[str] | None = None) -> Dict[str, Dict[str, Any]]:
     best: Dict[str, Dict[str, Any]] = {}
     for bm in bookmakers:
         book_key = bm.get("key")
+        if allowed_books and book_key not in allowed_books:
+            continue
         for market in bm.get("markets", []):
             if market.get("key") not in ("h2h", "spreads", "totals"):
                 continue
@@ -44,12 +39,13 @@ def two_way_fair_probs(bookmakers: List[Dict[str, Any]], market_key: str, side_a
     pa, pb = raw_a / n, raw_b / n
     return no_vig_two_way(pa, pb)
 
-def build_straight_picks(event: Dict[str, Any], kelly_fraction: float, bankroll_units: float, edge_A: float, edge_B: float) -> List[Dict[str, Any]]:
+def build_straight_picks(event: Dict[str, Any], kelly_fraction: float, bankroll_units: float, edge_A: float, edge_B: float,
+                         price_books: List[str] | None = None) -> List[Dict[str, Any]]:
     picks: List[Dict[str, Any]] = []
     bms = event.get("bookmakers", [])
 
     fair_home, fair_away = two_way_fair_probs(bms, "h2h", event.get("home_team"), event.get("away_team"))
-    best = _best_prices_two_way(bms)
+    best = _best_prices_two_way(bms, allowed_books=price_books)
 
     for sel_key, info in best.items():
         market_key, name = sel_key.split("::", 1)
@@ -121,3 +117,8 @@ def build_parlays(picks: List[Dict[str, Any]], conservative_legs: int = 2, balan
             "notes": "Assumes independence; avoid same-game legs for v1."
         })
     return outputs
+
+def find_near_misses(picks: List[Dict[str, Any]], ev_floor: float = -0.02, ev_ceiling: float = 0.0, limit: int = 10) -> List[Dict[str, Any]]:
+    near = [p for p in picks if ev_floor <= p["ev_per_unit"] < ev_ceiling]
+    near.sort(key=lambda x: -x["ev_per_unit"])
+    return near[:limit]
