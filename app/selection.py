@@ -85,12 +85,102 @@ def build_straight_picks(event: Dict[str, Any], kelly_fraction: float, bankroll_
         })
     return sorted(picks, key=lambda x: (-x["ev_per_unit"], -x["stake_units"]))
 
-def build_parlays(picks: List[Dict[str, Any]], conservative_legs: int = 2, balanced_legs: int = 3, fun_max_legs: int = 4) -> List[Dict[str, Any]]:
-    by_event = {}
+def build_parlays(
+    picks: List[Dict[str, Any]],
+    conservative_legs: int = 2,
+    balanced_legs: int = 3,
+    fun_max_legs: int = 4,
+    max_legs_per_game: int = 1,
+    avoid_same_player: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Build parlay suggestions with light correlation control:
+      - limit legs taken from the same game/event (default 1)
+      - (optional) avoid multiple props on the same player if 'player_name' present in pick dict
+
+    Expected pick fields used:
+      event_id, decimal, model_prob, ev_per_unit, selection, market, book, odds
+      (optional) player_name  -> only used if present
+    """
+    if not picks:
+        return []
+
+    # Group picks by event (game) so we can cap legs per game
+    by_event: Dict[str, List[Dict[str, Any]]] = {}
     for p in picks:
         by_event.setdefault(p["event_id"], []).append(p)
-    per_event_best = [sorted(v, key=lambda x: -x["ev_per_unit"])[0] for v in by_event.values()]
-    per_event_best = sorted(per_event_best, key=lambda x: -x["ev_per_unit"])[:12]
+
+    # Best pick(s) per event, sorted by EV
+    per_event_sorted = {eid: sorted(v, key=lambda x: (-x["ev_per_unit"], -x.get("stake_units", 0.0))) for eid, v in by_event.items()}
+
+    # Build a candidate list obeying max_legs_per_game and avoid_same_player
+    candidates: List[Dict[str, Any]] = []
+    player_seen: set = set()
+
+    # Take up to `max_legs_per_game` from each event, in EV order
+    for eid, legs in per_event_sorted.items():
+        taken = 0
+        for leg in legs:
+            if taken >= max_legs_per_game:
+                break
+            # Player correlation guard (only applies if we actually have a player identifier)
+            if avoid_same_player:
+                player_key = leg.get("player_name")  # add this upstream when you parse props
+                if player_key and player_key in player_seen:
+                    continue
+            candidates.append(leg)
+            if avoid_same_player:
+                if leg.get("player_name"):
+                    player_seen.add(leg["player_name"])
+            taken += 1
+
+    # Global cap to keep combos reasonable
+    candidates = sorted(candidates, key=lambda x: (-x["ev_per_unit"], -x.get("stake_units", 0.0)))[:24]
+
+    def _combine(legs: List[Dict[str, Any]]) -> tuple[float, float, float]:
+        """Return (hit_prob, decimal_price, EV) assuming independence (conservative v2)."""
+        prob, price = 1.0, 1.0
+        for l in legs:
+            prob *= float(l["model_prob"])
+            price *= float(l["decimal"])
+        ev = prob * (price - 1.0) - (1.0 - prob)
+        return prob, price, ev
+
+    outputs: List[Dict[str, Any]] = []
+    buckets = [
+        ("Conservative 2-leg", conservative_legs),
+        ("Balanced 3-leg", balanced_legs),
+        ("Fun", min(fun_max_legs, max(2, len(candidates) // 3)))
+    ]
+
+    for name, n_legs in buckets:
+        if len(candidates) < n_legs:
+            continue
+        legs = candidates[:n_legs]
+        hit_prob, combo_dec, est_ev = _combine(legs)
+        outputs.append({
+            "name": name,
+            "legs": [
+                {
+                    "event_id": l["event_id"],
+                    "selection": l["selection"],
+                    "market": l.get("market", "moneyline"),
+                    "book": l.get("book"),
+                    "odds": l.get("odds"),
+                } for l in legs
+            ],
+            "combined_decimal": round(combo_dec, 4),
+            "est_hit_prob": round(hit_prob, 4),
+            "est_ev": round(est_ev, 4),
+            "notes": (
+                "Independence assumption. "
+                f"Max {max_legs_per_game} leg(s) per game enforced; "
+                + ("same-player props filtered when identifiable." if avoid_same_player else "same-player props allowed.")
+            ),
+        })
+
+    return outputs
+
 
     def _combine(legs: List[Dict[str, Any]]):
         prob = 1.0
