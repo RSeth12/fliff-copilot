@@ -6,6 +6,15 @@ from config import ODDS_API_KEY, BOOKS   # <— change this line (remove the lea
 
 BASE_URL = "https://api.the-odds-api.com/v4"
 
+def fetch_sports() -> List[Dict[str, Any]]:
+    """Return all available sports with their provider keys."""
+    if not ODDS_API_KEY:
+        raise RuntimeError("Missing ODDS_API_KEY in environment or secrets.")
+    url = f"{BASE_URL}/sports"
+    r = requests.get(url, params={"apiKey": ODDS_API_KEY}, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
 
 def fetch_odds_for_sport(sport_key: str, regions: str = "us", markets: str = "h2h,spreads,totals", date_format: str = "iso") -> List[Dict[str, Any]]:
     if not ODDS_API_KEY:
