@@ -118,7 +118,177 @@ def build_parlays(picks: List[Dict[str, Any]], conservative_legs: int = 2, balan
         })
     return outputs
 
+
+def _collect_two_way_by_point(bookmakers, market_key, side_a, side_b):
+    """Return dict: {point: (avg_raw_prob_a, avg_raw_prob_b, count)} across books."""
+    buckets = {}
+    for bm in bookmakers:
+        for m in bm.get("markets", []):
+            if m.get("key") != market_key:
+                continue
+            outs = m.get("outcomes", [])
+            # Need exactly two: side_a and side_b for the same point
+            # outcomes often look like: name="home"/"away" for spreads, or "Over"/"Under" for totals/props
+            pts = {}
+            for o in outs:
+                name = o.get("name")
+                point = o.get("point")
+                price = o.get("price")
+                if name in (side_a, side_b) and point is not None:
+                    pts.setdefault(point, {})[name] = price
+            for pt, d in pts.items():
+                if side_a in d and side_b in d:
+                    pa = american_to_prob(d[side_a])
+                    pb = american_to_prob(d[side_b])
+                    a, b, n = buckets.get(pt, (0.0, 0.0, 0))
+                    buckets[pt] = (a + pa, b + pb, n + 1)
+    return buckets
+
+def _best_prices_two_way_with_point(bookmakers, market_key, allowed_books=None):
+    """Return best price per selection *and* point: {(name, point): {price, book}}."""
+    best = {}
+    for bm in bookmakers:
+        book_key = bm.get("key")
+        if allowed_books and book_key not in allowed_books:
+            continue
+        for m in bm.get("markets", []):
+            if m.get("key") != market_key:
+                continue
+            for o in m.get("outcomes", []):
+                name = o.get("name")
+                pt = o.get("point")
+                price = o.get("price")
+                if name is None or pt is None or price is None:
+                    continue
+                key = (name, float(pt))
+                if key not in best or price > best[key]["price"]:
+                    best[key] = {"price": price, "book": book_key, "point": float(pt)}
+    return best
+
+def build_spread_picks(event, kelly_fraction, bankroll_units, edge_A, edge_B, price_books=None):
+    picks = []
+    bms = event.get("bookmakers", [])
+    # home/away spread names are usually team names
+    buckets = _collect_two_way_by_point(bms, "spreads", event.get("home_team"), event.get("away_team"))
+    best = _best_prices_two_way_with_point(bms, "spreads", allowed_books=price_books)
+
+    for pt, (sum_a, sum_b, n) in buckets.items():
+        if n == 0: 
+            continue
+        # fair probs for this spread point
+        pa_raw, pb_raw = sum_a / n, sum_b / n
+        pa, pb = no_vig_two_way(pa_raw, pb_raw)
+
+        for name, fair in ((event.get("home_team"), pa), (event.get("away_team"), pb)):
+            key = (name, float(pt))
+            if key not in best:
+                continue  # Fliff might not offer this exact point
+            info = best[key]
+            dec = american_to_decimal(info["price"])
+            model = fair  # v2 still market-anchored; can blend model later
+            edge = (model - fair) * 100.0
+            ev = expected_value_per_unit(model, dec)
+            stake = kelly_stake_units(model, dec, kelly_fraction, bankroll_units)
+            picks.append({
+                "event_id": event.get("id"),
+                "sport_key": event.get("sport_key"),
+                "commence_time": event.get("commence_time"),
+                "market": f"spread {pt:+}",
+                "selection": f"{name} {pt:+}",
+                "book": info["book"],
+                "odds": info["price"],
+                "decimal": dec,
+                "fair_prob": round(fair, 4),
+                "model_prob": round(model, 4),
+                "edge_pct": round(edge, 2),
+                "ev_per_unit": round(ev, 4),
+                "stake_units": stake,
+                "confidence": confidence_from_edge(edge, edge_A, edge_B),
+                "reason": f"Consensus fair at {pt:+} using full market; priced with {info['book']}."
+            })
+    return sorted(picks, key=lambda x: (-x["ev_per_unit"], -x["stake_units"]))
+
 def find_near_misses(picks: List[Dict[str, Any]], ev_floor: float = -0.02, ev_ceiling: float = 0.0, limit: int = 10) -> List[Dict[str, Any]]:
     near = [p for p in picks if ev_floor <= p["ev_per_unit"] < ev_ceiling]
     near.sort(key=lambda x: -x["ev_per_unit"])
     return near[:limit]
+
+def build_total_picks(event, kelly_fraction, bankroll_units, edge_A, edge_B, price_books=None):
+    picks = []
+    bms = event.get("bookmakers", [])
+    buckets = _collect_two_way_by_point(bms, "totals", "Over", "Under")
+    best = _best_prices_two_way_with_point(bms, "totals", allowed_books=price_books)
+
+    for pt, (sum_o, sum_u, n) in buckets.items():
+        if n == 0:
+            continue
+        po_raw, pu_raw = sum_o / n, sum_u / n
+        po, pu = no_vig_two_way(po_raw, pu_raw)
+        for name, fair in (("Over", po), ("Under", pu)):
+            key = (name, float(pt))
+            if key not in best:
+                continue
+            info = best[key]
+            dec = american_to_decimal(info["price"])
+            model = fair
+            edge = (model - fair) * 100.0
+            ev = expected_value_per_unit(model, dec)
+            stake = kelly_stake_units(model, dec, kelly_fraction, bankroll_units)
+            picks.append({
+                "event_id": event.get("id"),
+                "sport_key": event.get("sport_key"),
+                "commence_time": event.get("commence_time"),
+                "market": f"total {pt}",
+                "selection": f"{name} {pt}",
+                "book": info["book"],
+                "odds": info["price"],
+                "decimal": dec,
+                "fair_prob": round(fair, 4),
+                "model_prob": round(model, 4),
+                "edge_pct": round(edge, 2),
+                "ev_per_unit": round(ev, 4),
+                "stake_units": stake,
+                "confidence": confidence_from_edge(edge, edge_A, edge_B),
+                "reason": f"Consensus fair O/U {pt} using full market; priced with {info['book']}."
+            })
+    return sorted(picks, key=lambda x: (-x["ev_per_unit"], -x["stake_units"]))
+
+def build_prop_picks(event, prop_market_keys, kelly_fraction, bankroll_units, edge_A, edge_B, price_books=None):
+    picks = []
+    bms = event.get("bookmakers", [])
+    for mkey in prop_market_keys:
+        buckets = _collect_two_way_by_point(bms, mkey, "Over", "Under")
+        best = _best_prices_two_way_with_point(bms, mkey, allowed_books=price_books)
+        for pt, (sum_o, sum_u, n) in buckets.items():
+            if n == 0:
+                continue
+            po_raw, pu_raw = sum_o/n, sum_u/n
+            po, pu = no_vig_two_way(po_raw, pu_raw)
+            for name, fair in (("Over", po), ("Under", pu)):
+                key = (name, float(pt))
+                if key not in best:
+                    continue
+                info = best[key]
+                dec = american_to_decimal(info["price"])
+                model = fair
+                edge = (model - fair) * 100.0
+                ev = expected_value_per_unit(model, dec)
+                stake = kelly_stake_units(model, dec, kelly_fraction, bankroll_units)
+                picks.append({
+                    "event_id": event.get("id"),
+                    "sport_key": event.get("sport_key"),
+                    "commence_time": event.get("commence_time"),
+                    "market": f"{mkey} {pt}",
+                    "selection": f"{name} {pt}",
+                    "book": info["book"],
+                    "odds": info["price"],
+                    "decimal": dec,
+                    "fair_prob": round(fair, 4),
+                    "model_prob": round(model, 4),
+                    "edge_pct": round(edge, 2),
+                    "ev_per_unit": round(ev, 4),
+                    "stake_units": stake,
+                    "confidence": confidence_from_edge(edge, edge_A, edge_B),
+                    "reason": f"Consensus fair for {mkey} @ {pt}; priced with {info['book']}."
+                })
+    return sorted(picks, key=lambda x: (-x["ev_per_unit"], -x["stake_units"]))
