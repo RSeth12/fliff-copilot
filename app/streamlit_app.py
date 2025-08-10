@@ -51,17 +51,23 @@ if fetch_clicked or refresh_clicked:
             for ev in events:
                 if not ev.get("bookmakers") or not ev.get("home_team") or not ev.get("away_team"):
                     continue
-                picks = build_straight_picks(
-                    ev,
-                    kelly_fraction=kelly_fraction,
-                    bankroll_units=bankroll_units,
-                    edge_A=EDGE_A,
-                    edge_B=EDGE_B,
-                    price_books=["fliff"],  # <- use only Fliff for displayed odds/pricing
-                )
+                # after we have 'events' and before appending to all_picks:
+                picks = []
+                # Moneylines (existing)
+                picks += build_straight_picks(ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"])
+                # Spreads
+                picks += build_spread_picks(ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"])
+                # Totals
+                picks += build_total_picks(ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"])
+                # Props (pass the prop markets you added in Secrets)
+                prop_keys = [k.strip() for k in (st.secrets.get("MARKETS", "") or "").split(",") if k.strip().startswith("player_")]
+                if prop_keys:
+                    picks += build_prop_picks(ev, prop_keys, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"])
+                
                 for p in picks:
                     p["explanation"] = explain_pick(p)
                 all_picks.extend(picks)
+
 
     if not all_picks:
         st.warning("No picks generated — try different sports or confirm your API key/books in app secrets.")
