@@ -1,9 +1,11 @@
 from __future__ import annotations
 import requests
 from typing import Any, Dict, List
-from .config import ODDS_API_KEY, BOOKS
+
+from config import ODDS_API_KEY, BOOKS   # <— change this line (remove the leading dot)
 
 BASE_URL = "https://api.the-odds-api.com/v4"
+
 
 def fetch_odds_for_sport(sport_key: str, regions: str = "us", markets: str = "h2h,spreads,totals", date_format: str = "iso") -> List[Dict[str, Any]]:
     if not ODDS_API_KEY:
