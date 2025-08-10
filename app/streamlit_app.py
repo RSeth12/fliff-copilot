@@ -26,7 +26,7 @@ st.set_page_config(page_title="Fliff Picks Copilot", page_icon="🎯", layout="w
 st.title("🎯 Fliff Picks Copilot — v2 (Cloud)")
 
 today = dt.date.today()
-st.caption(f"Today: {today.isoformat()} — Fair probs from full market; prices from Fliff only.")
+st.caption(f"Today: {today.isoformat()} — Fair probs from full market; pricing uses best line from any book.")
 
 # Dynamic sports list from provider
 with st.spinner("Loading sports…"):
@@ -68,16 +68,16 @@ if fetch_clicked or refresh_clicked:
                         if m.get("key"):
                             detected_markets.add(m["key"])
 
-                # Build picks across markets (Fliff pricing; market consensus for fair)
+                # Build picks across markets — BEST PRICE FROM ANY BOOK
                 picks = []
                 picks += build_straight_picks(
-                    ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"]
+                    ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=None
                 )
                 picks += build_spread_picks(
-                    ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"]
+                    ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=None
                 )
                 picks += build_total_picks(
-                    ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"]
+                    ev, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=None
                 )
                 # Props: pull keys that start with player_
                 prop_keys = [
@@ -87,7 +87,7 @@ if fetch_clicked or refresh_clicked:
                 ]
                 if prop_keys:
                     picks += build_prop_picks(
-                        ev, prop_keys, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=["fliff"]
+                        ev, prop_keys, kelly_fraction, bankroll_units, EDGE_A, EDGE_B, price_books=None
                     )
 
                 for p in picks:
