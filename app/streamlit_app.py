@@ -1,12 +1,18 @@
 from __future__ import annotations
+import os, sys
+# make local folder importable
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.append(CURRENT_DIR)
+
 import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from app.config import SPORTS, KELLY_FRACTION, EDGE_A, EDGE_B, PARLAY_MAX_LEGS
-from app.odds_api import fetch_odds_for_sport
-from app.selection import build_straight_picks, build_parlays
-from app.reasoning import explain_pick
+from config import SPORTS, KELLY_FRACTION, EDGE_A, EDGE_B, PARLAY_MAX_LEGS
+from odds_api import fetch_odds_for_sport
+from selection import build_straight_picks, build_parlays
+from reasoning import explain_pick
 
 st.set_page_config(page_title="Fliff Picks Copilot", page_icon="🎯", layout="wide")
 st.title("🎯 Fliff Picks Copilot — v1 (Cloud)")
